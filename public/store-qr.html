@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <title>สแกนเพื่อสะสมแต้ม – ร้านต่อขนตา</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      :root { --pink:#E91E63; --gold:#C9A227; --bg:#FFF7FB; }
+      html,body{height:100%} body{margin:0;display:grid;place-items:center;background:var(--bg);font-family:Kanit,Prompt,system-ui,Roboto,sans-serif}
+      .card{width:min(92vw,420px);background:#fff;border-radius:20px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.08);text-align:center;border:2px solid rgba(201,162,39,.15)}
+      h1{margin:0 0 10px;color:var(--pink);font-weight:800;font-size:22px}
+      .muted{color:#777;font-size:14px;margin-top:6px}
+      .qrwrap{margin:18px auto 10px;width:300px;height:300px;border-radius:16px;background:#fff;display:grid;place-items:center;border:2px solid rgba(233,30,99,.12)}
+      img.qr{width:300px;height:300px;display:block}
+      .row{display:flex;justify-content:center;gap:12px;align-items:center;margin-top:8px}
+      .chip{display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(0,0,0,.08);padding:6px 10px;border-radius:999px;font-size:13px;background:#fff}
+      .pink{color:var(--pink);border-color:rgba(233,30,99,.25)} .gold{color:var(--gold);border-color:rgba(201,162,39,.25)}
+      .btn{margin-top:14px;background:var(--pink);color:#fff;border:none;border-radius:999px;padding:10px 14px;font-weight:600;cursor:pointer}
+      .btn:disabled{opacity:.6;cursor:not-allowed}.err{color:#c62828;margin-top:8px;font-size:14px;min-height:20px}.ok{color:#2e7d32;margin-top:8px;font-size:14px;min-height:20px}
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;600;800&family=Prompt:wght@400;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div class="card">
+      <h1>สแกน QR เพื่อสะสมแต้ม</h1>
+      <div class="row">
+        <span class="chip pink" id="storeChip">สาขา: EYELASH_001</span>
+        <span class="chip gold" id="ttlChip">หมดอายุใน — วินาที</span>
+      </div>
+      <div class="qrwrap"><img class="qr" id="qrimg" alt="QR code" /></div>
+      <div id="msg" class="ok"></div><div id="err" class="err"></div>
+      <button id="refreshBtn" class="btn">รีเฟรช QR</button>
+      <div class="muted">QR จะรีเฟรชอัตโนมัติทุก ~15 วินาที</div>
+    </div>
+    <script>
+      const FUNCTION_URL = '/api/qr?storeId=EYELASH_001';
+      const img = document.getElementById('qrimg');
+      const msgEl = document.getElementById('msg');
+      const errEl = document.getElementById('err');
+      const ttlEl = document.getElementById('ttlChip');
+      const refreshBtn = document.getElementById('refreshBtn');
+      let expEpoch = 0, ttlTimer=null, autoTimer=null;
+
+      function clearTimers(){ if(ttlTimer){clearInterval(ttlTimer);ttlTimer=null} if(autoTimer){clearTimeout(autoTimer);autoTimer=null} }
+      function startTTL(){
+        clearInterval(ttlTimer);
+        ttlTimer = setInterval(()=>{
+          const now = Math.floor(Date.now()/1000);
+          const sec = Math.max(0, expEpoch - now);
+          ttlEl.textContent = sec>0?`หมดอายุใน ${sec} วินาที`:`หมดอายุแล้ว`;
+        }, 250);
+      }
+      async function loadQR(){
+        try{
+          msgEl.textContent=''; errEl.textContent=''; refreshBtn.disabled=true;
+          const res = await fetch(FUNCTION_URL, { cache:'no-store' });
+          if(!res.ok) throw new Error('โหลดโค้ดไม่สำเร็จ');
+          const data = await res.json(); // { code, storeId, exp }
+          expEpoch = data.exp || 0;
+          const payload = JSON.stringify({ code: data.code });
+          const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(payload);
+          img.src = qrUrl; startTTL();
+          clearTimeout(autoTimer); autoTimer = setTimeout(loadQR, 15000);
+          msgEl.textContent = 'QR พร้อมสแกน';
+        }catch(e){ errEl.textContent = (e && e.message) ? e.message : 'เกิดข้อผิดพลาด'; }
+        finally{ refreshBtn.disabled=false; }
+      }
+      refreshBtn.addEventListener('click', loadQR);
+      window.addEventListener('pageshow', loadQR);
+      window.addEventListener('beforeunload', clearTimers);
+    </script>
+  </body>
+</html>
