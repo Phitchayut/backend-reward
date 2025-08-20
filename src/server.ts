@@ -7,67 +7,117 @@ import passport from './auth';
 import { getQr, postRedeem, requireAuth } from './qr';
 import path from 'path';
 import { pool } from './db';
-import deletionRouter from './deletion'; // ถ้าไม่ใช้ลบข้อมูลให้ลบบรรทัดนี้ทิ้ง
+import deletionRouter from './deletion';
 
 const app = express();
 const PgSession = connectPgSimple(session);
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 const PORT = parseInt(process.env.PORT || (IS_PROD ? '10000' : '4000'), 10);
-const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
-const SESSION_SECRET = process.env.SESSION_SECRET || 'dev_secret';
 
-app.use(cors({ origin: CLIENT_ORIGIN, credentials: true }));
+// ✅ ควรเป็น origin แบบ “ไม่มี / ท้าย”
+const FRONTEND = (process.env.CLIENT_ORIGIN || 'https://goodmorning-lash-studio.netlify.app').replace(/\/$/, '');
+
+// ✅ สำคัญ: อยู่หลัง proxy (Render/Heroku ฯลฯ)
+app.set('trust proxy', 1);
+
+// ---------- CORS ----------
+app.use(cors({
+  origin: (origin, cb) => {
+    // อนุญาต request ที่ไม่มี Origin (เช่น curl/health check)
+    if (!origin) return cb(null, true);
+    const allowlist = new Set([FRONTEND]);
+    if (allowlist.has(origin)) return cb(null, true);
+    return cb(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization'],
+}));
+// ให้ cache แยกตาม origin
+app.use((_, res, next) => { res.header('Vary', 'Origin'); next(); });
+
+// ---------- Parsers ----------
 app.use(express.json());
 
+// ---------- Session ----------
 app.use(session({
   store: new PgSession({
     pool,
     tableName: 'session',
-    createTableIfMissing: true
+    createTableIfMissing: true,
   }),
-  secret: SESSION_SECRET,
+  secret: process.env.SESSION_SECRET || 'dev_secret',
   resave: false,
   saveUninitialized: false,
   cookie: {
-    sameSite: 'lax',
-    secure: IS_PROD,              // Render (HTTPS) = true, local dev = false
-    maxAge: 7 * 24 * 3600 * 1000
-  }
+    httpOnly: true,
+    // ✅ Cross-site cookie ต้องเป็น secure + sameSite:'none'
+    secure: IS_PROD,           // Render คือ HTTPS -> true
+    sameSite: IS_PROD ? 'none' : 'lax', // dev local ยังปล่อย lax ได้
+    maxAge: 7 * 24 * 3600 * 1000,
+  },
 }));
 
+// ---------- Passport ----------
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Static (store-qr.html)
+// ---------- Static (store-qr.html) ----------
 app.use(express.static(path.join(__dirname, '../public')));
 
-// Auth routes
-app.get('/auth/facebook', passport.authenticate('facebook'));
-app.get('/auth/facebook/callback',
-  passport.authenticate('facebook', { failureRedirect: CLIENT_ORIGIN + '/?login=failed' }),
-  (_req, res) => res.redirect(CLIENT_ORIGIN + '/?login=success')
+// ---------- Auth ----------
+app.get('/auth/facebook',
+  // ขอ scope email ด้วยถ้าต้องใช้
+  passport.authenticate('facebook', { scope: ['email'] })
 );
+
+app.get('/auth/facebook/callback',
+  passport.authenticate('facebook', { failureRedirect: `${FRONTEND}/?login=failed` }),
+  (_req, res) => res.redirect(`${FRONTEND}/?login=success`)
+);
+
+// endpoint ให้ frontend ดึงโปรไฟล์ (ต้องส่ง credentials ในฝั่ง client)
 app.get('/auth/status', (req, res) => {
   const isAuth = (req as any).isAuthenticated && (req as any).isAuthenticated();
   if (isAuth) {
     const u = (req as any).user;
-    return res.json({ loggedIn: true, user: { id: u.id, displayName: u.display_name, photo: u.photo, stampCount: u.stamp_count } });
+    return res.json({
+      loggedIn: true,
+      user: {
+        id: u.id,
+        displayName: u.display_name,
+        photo: u.photo,
+        stampCount: u.stamp_count,
+      }
+    });
   }
   res.json({ loggedIn: false });
 });
+
 app.post('/auth/logout', (req, res, next) => {
-  (req as any).logout((err: any) => err ? next(err) : res.json({ ok: true }));
+  (req as any).logout((err: any) => {
+    if (err) return next(err);
+    // ทำลาย session ใน store ด้วย (optional)
+    req.session?.destroy(() => {
+      res.clearCookie('connect.sid', {
+        httpOnly: true,
+        secure: IS_PROD,
+        sameSite: IS_PROD ? 'none' : 'lax',
+      });
+      res.json({ ok: true });
+    });
+  });
 });
 
-// APIs
+// ---------- APIs ----------
 app.get('/api/qr', getQr);
 app.post('/api/redeem', requireAuth, postRedeem);
 
-// (ออปชัน) Data deletion endpoint
+// ---------- Deletion (optional) ----------
 app.use('/', deletionRouter);
 
-// Health
+// ---------- Health ----------
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => console.log('Server on :' + PORT));
