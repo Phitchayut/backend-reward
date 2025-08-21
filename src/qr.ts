@@ -1,17 +1,36 @@
 import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { pool, nowSec } from './db';
+import jwt from 'jsonwebtoken';
 
 const STORE_ID = process.env.STORE_ID || 'EYELASH_001';
 const QR_TTL_SECONDS = parseInt(process.env.QR_TTL_SECONDS || '60', 10);
 const MIN_INTERVAL_SECONDS = parseInt(process.env.MIN_INTERVAL_SECONDS || '60', 10);
 const signSecret = process.env.SESSION_SECRET || 'dev_secret';
-
+const JWT_SECRET = process.env.JWT_SECRET!;
 const hmac = (payload: string) => crypto.createHmac('sha256', signSecret).update(payload).digest('hex');
 
+// รองรับทั้ง Bearer token และ session ของ passport
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
+  // 1) ลองอ่านจาก Authorization: Bearer <token>
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+
+  if (token) {
+    try {
+      const payload = jwt.verify(token, JWT_SECRET) as any;
+      // แนบ payload ไว้ที่ req.user เพื่อให้ downstream ใช้ต่อได้
+      (req as any).user = payload;
+      return next();
+    } catch {
+      // token ผิด/หมดอายุ → ตกไปเช็ค session ต่อ
+    }
+  }
+
+  // 2) fallback: session (เผื่อบางอุปกรณ์/เดสก์ท็อปยังส่ง cookie มาได้)
   const authed = (req as any).isAuthenticated && (req as any).isAuthenticated();
-  if (authed) return next();
+  if (authed && (req as any).user) return next();
+
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
