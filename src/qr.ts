@@ -12,22 +12,18 @@ const hmac = (payload: string) => crypto.createHmac('sha256', signSecret).update
 
 // รองรับทั้ง Bearer token และ session ของ passport
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  // 1) ลองอ่านจาก Authorization: Bearer <token>
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
 
   if (token) {
     try {
       const payload = jwt.verify(token, JWT_SECRET) as any;
-      // แนบ payload ไว้ที่ req.user เพื่อให้ downstream ใช้ต่อได้
-      (req as any).user = payload;
+      // ✅ ใช้เฉพาะ id จาก token
+      (req as any).user = { id: payload.id };
       return next();
-    } catch {
-      // token ผิด/หมดอายุ → ตกไปเช็ค session ต่อ
-    }
+    } catch { /* ตกไปเช็ค session */ }
   }
 
-  // 2) fallback: session (เผื่อบางอุปกรณ์/เดสก์ท็อปยังส่ง cookie มาได้)
   const authed = (req as any).isAuthenticated && (req as any).isAuthenticated();
   if (authed && (req as any).user) return next();
 

@@ -93,33 +93,36 @@ app.get('/auth/facebook/callback',
 );
 
 // ✅ /auth/status: รองรับ Bearer ก่อน แล้วค่อย fallback เป็น session
-app.get('/auth/status', (req, res) => {
+app.get('/auth/status', async (req, res) => {
+  const JWT_SECRET = process.env.JWT_SECRET!;
+  let uid: number | string | undefined;
+
+  // 1) ดึง id จาก Bearer token ก่อน
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-
   if (token) {
     try {
-      const payload: any = jwt.verify(token, process.env.JWT_SECRET!);
-      return res.json({ loggedIn: true, user: payload });
-    } catch {
-      // token ไม่ถูก/หมดอายุ → ตกไปเช็ค session ต่อ
-    }
+      const p: any = jwt.verify(token, JWT_SECRET);
+      uid = p.id;                 // ✅ ใช้เฉพาะ id จาก token
+    } catch {/* ignore and fallback */}
   }
 
-  const isAuth = (req as any).isAuthenticated && (req as any).isAuthenticated();
-  if (isAuth) {
-    const u = (req as any).user;
-    return res.json({
-      loggedIn: true,
-      user: {
-        id: u.id,
-        displayName: u.display_name,
-        photo: u.photo,
-        stampCount: u.stamp_count,
-      }
-    });
+  // 2) fallback: session (กรณีบางเครื่องยังใช้ cookie ได้)
+  if (!uid && (req as any).isAuthenticated?.()) {
+    uid = (req as any).user?.id;
   }
-  res.status(401).json({ loggedIn: false });
+
+  if (!uid) return res.status(401).json({ loggedIn: false });
+
+  // 3) อ่าน “ค่าปัจจุบัน” จาก DB เสมอ
+  const { rows } = await pool.query(
+    `SELECT id, display_name AS "displayName", photo, stamp_count AS "stampCount"
+     FROM users WHERE id=$1`,
+    [uid]
+  );
+  if (!rows.length) return res.status(401).json({ loggedIn: false });
+
+  return res.json({ loggedIn: true, user: rows[0] });
 });
 
 app.post('/auth/logout', (req, res, next) => {
