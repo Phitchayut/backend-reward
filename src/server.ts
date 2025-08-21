@@ -8,6 +8,7 @@ import { getQr, postRedeem, requireAuth } from './qr';
 import path from 'path';
 import { pool } from './db';
 import deletionRouter from './deletion';
+import jwt from 'jsonwebtoken';
 
 const app = express();
 const PgSession = connectPgSimple(session);
@@ -66,19 +67,45 @@ app.use(passport.session());
 // ---------- Static (store-qr.html) ----------
 app.use(express.static(path.join(__dirname, '../public')));
 
+function signUserJWT(user: any) {
+  const payload = {
+    id: user.id,
+    displayName: user.display_name,
+    photo: user.photo,
+    stampCount: user.stamp_count,
+  };
+  return jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: '2h' });
+}
+
 // ---------- Auth ----------
 app.get('/auth/facebook',
-  // ขอ scope email ด้วยถ้าต้องใช้
   passport.authenticate('facebook', { scope: ['email'] })
 );
 
+
+// ✅ หลัง login สำเร็จ: ออก JWT แล้วแนบกลับทาง hash
 app.get('/auth/facebook/callback',
   passport.authenticate('facebook', { failureRedirect: `${FRONTEND}/?login=failed` }),
-  (_req, res) => res.redirect(`${FRONTEND}/?login=success`)
+  (req, res) => {
+    const token = signUserJWT((req as any).user);
+    return res.redirect(`${FRONTEND}/?login=success#token=${encodeURIComponent(token)}`);
+  }
 );
 
-// endpoint ให้ frontend ดึงโปรไฟล์ (ต้องส่ง credentials ในฝั่ง client)
+// ✅ /auth/status: รองรับ Bearer ก่อน แล้วค่อย fallback เป็น session
 app.get('/auth/status', (req, res) => {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+
+  if (token) {
+    try {
+      const payload: any = jwt.verify(token, process.env.JWT_SECRET!);
+      return res.json({ loggedIn: true, user: payload });
+    } catch {
+      // token ไม่ถูก/หมดอายุ → ตกไปเช็ค session ต่อ
+    }
+  }
+
   const isAuth = (req as any).isAuthenticated && (req as any).isAuthenticated();
   if (isAuth) {
     const u = (req as any).user;
@@ -92,7 +119,7 @@ app.get('/auth/status', (req, res) => {
       }
     });
   }
-  res.json({ loggedIn: false });
+  res.status(401).json({ loggedIn: false });
 });
 
 app.post('/auth/logout', (req, res, next) => {
