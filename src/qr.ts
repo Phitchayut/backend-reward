@@ -65,10 +65,20 @@ export async function postRedeem(req: Request, res: Response) {
 
   const uRes = await pool.query('SELECT * FROM users WHERE id=$1', [user.id]);
   const u = uRes.rows[0];
-  const last = u?.updated_at ?? 0;
-  if (nowSec() - last < MIN_INTERVAL_SECONDS) {
-    return res.status(429).json({ error: 'Please wait before scanning again.' });
+let lastSec = 0;
+if (u?.updated_at != null) {
+  if (typeof u.updated_at === 'number') {
+    // ถ้าเป็นมิลลิวินาที (13 หลัก) แปลงเป็นวินาที
+    lastSec = u.updated_at > 1e12 ? Math.floor(u.updated_at / 1000) : u.updated_at;
+  } else {
+    // ถ้าเป็น string/Date (timestamp) แปลงเป็นวินาที
+    lastSec = Math.floor(new Date(u.updated_at).getTime() / 1000);
   }
+}
+
+if (nowSec() - lastSec < MIN_INTERVAL_SECONDS) {
+  return res.status(429).json({ error: 'Please wait before scanning again.' });
+}
 
   const current = u?.stamp_count ?? 0;
   const next = (current + 1) % 8;
